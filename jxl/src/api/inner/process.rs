@@ -31,13 +31,12 @@ impl SmallBuffer {
     ) -> Result<usize> {
         let mut total = 0;
         loop {
-            if self.range.start >= self.buf.len() / 2 {
+            if self.range.start >= self.buf.len() / 2 && !self.range.is_empty() {
                 let start = self.range.start;
                 let len = self.range.len();
-                let (pre, post) = self.buf.split_at_mut(start);
-                pre[0..len].copy_from_slice(&post[0..len]);
-                self.range.start -= start;
-                self.range.end -= start;
+                self.buf.copy_within(start..start + len, 0);
+                self.range.start = 0;
+                self.range.end = len;
             }
             if self.range.len() >= self.buf.len() / 2 {
                 break;
@@ -123,6 +122,25 @@ impl Deref for SmallBuffer {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.buf[self.range.clone()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refill_compacts_when_range_spans_second_half_with_odd_capacity() {
+        let mut buf = SmallBuffer::new(93);
+        // Fill the second half so compaction runs with len > start (93/2 = 46, len = 47).
+        buf.range = 46..93;
+        for i in 46..93 {
+            buf.buf[i] = (i - 46) as u8;
+        }
+        let read = buf.refill(|_| Ok(0), None).expect("refill must not panic");
+        assert_eq!(read, 0);
+        assert_eq!(buf.range, 0..47);
+        assert_eq!(&buf.buf[0..47], &(0u8..47).collect::<Vec<_>>());
     }
 }
 
