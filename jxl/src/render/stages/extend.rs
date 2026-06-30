@@ -11,6 +11,8 @@ use crate::{
     headers::{FileHeader, extra_channels::ExtraChannelInfo, frame_header::*},
 };
 
+use super::blending::reference_usable_for_blending;
+
 /// Does not directly modify the current image pixels, but extends the current image with
 /// additional data.
 ///
@@ -38,6 +40,15 @@ impl ExtendToImageDimensionsStage {
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Result<ExtendToImageDimensionsStage> {
         let xsize = file_header.size.xsize() as usize;
+        let image_size = (xsize, file_header.size.ysize() as usize);
+        if let Some(ref rf) = reference_frames[frame_header.blending_info.source as usize] {
+            reference_usable_for_blending(rf, image_size)?;
+        }
+        for ec in &frame_header.ec_blending_info {
+            if let Some(ref rf) = reference_frames[ec.source as usize] {
+                reference_usable_for_blending(rf, image_size)?;
+            }
+        }
         Ok(ExtendToImageDimensionsStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
             image_size: (xsize, file_header.size.ysize() as usize),

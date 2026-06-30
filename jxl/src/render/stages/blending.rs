@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::{
-    error::Result,
+    error::{Error, Result},
     features::{
         blending::perform_blending,
         patches::{PatchBlendMode, PatchBlending},
@@ -16,6 +16,22 @@ use crate::{
     render::RenderPipelineInPlaceStage,
     util::ChannelVec,
 };
+
+/// Reference frames used for (non-patch) blending must cover the full image
+/// canvas. Validated up front so the per-row code can index references directly.
+pub(super) fn reference_usable_for_blending(
+    rf: &ReferenceFrame,
+    image_size: (usize, usize),
+) -> Result<()> {
+    let (ref_w, ref_h) = match rf.frame.first() {
+        Some(channel) => channel.size(),
+        None => return Err(Error::NonPatchReferenceWithCrop),
+    };
+    if ref_w < image_size.0 || ref_h < image_size.1 {
+        return Err(Error::NonPatchReferenceWithCrop);
+    }
+    Ok(())
+}
 
 pub struct BlendingStage {
     pub frame_origin: (isize, isize),
@@ -65,8 +81,17 @@ impl BlendingStage {
         reference_frames: Arc<[Option<ReferenceFrame>; 4]>,
     ) -> Result<BlendingStage> {
         let xsize = file_header.size.xsize();
+        let image_size = (xsize as usize, file_header.size.ysize() as usize);
         let ec_blending_info = frame_header.ec_blending_info.clone();
         let ec_patch_blending_info = ec_blending_info.iter().map(PatchBlending::from).collect();
+        if let Some(ref rf) = reference_frames[frame_header.blending_info.source as usize] {
+            reference_usable_for_blending(rf, image_size)?;
+        }
+        for ec in &ec_blending_info {
+            if let Some(ref rf) = reference_frames[ec.source as usize] {
+                reference_usable_for_blending(rf, image_size)?;
+            }
+        }
         Ok(BlendingStage {
             frame_origin: (frame_header.x0 as isize, frame_header.y0 as isize),
             image_size: (xsize as isize, file_header.size.ysize() as isize),
@@ -194,5 +219,30 @@ mod test {
             (500, 500),
             4,
         )
+    }
+
+    #[test]
+    fn reference_must_cover_canvas() {
+        use crate::error::Error;
+
+        // Regression: a reference frame smaller than the canvas used to be
+        // indexed out of bounds by the per-row blending code.
+        let small = ReferenceFrame::blank(4, 4, 3, false).unwrap();
+        assert!(matches!(
+            reference_usable_for_blending(&small, (8, 8)),
+            Err(Error::NonPatchReferenceWithCrop)
+        ));
+
+        let empty = ReferenceFrame {
+            frame: vec![],
+            saved_before_color_transform: false,
+        };
+        assert!(matches!(
+            reference_usable_for_blending(&empty, (8, 8)),
+            Err(Error::NonPatchReferenceWithCrop)
+        ));
+
+        let covering = ReferenceFrame::blank(8, 8, 3, false).unwrap();
+        assert!(reference_usable_for_blending(&covering, (8, 8)).is_ok());
     }
 }
