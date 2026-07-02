@@ -322,6 +322,34 @@ pub(crate) mod tests {
         });
     }
 
+    /// Regression test for a fuzzer-found panic in modular partial-render flush.
+    ///
+    /// When a modular buffer uses the LF grid (fewer groups than HF), `flush_output`
+    /// must map the HF group index into the buffer's grid before indexing `buffer_grid`.
+    /// The input is malformed; decoding may error, but must not panic.
+    #[test]
+    fn test_fuzzer_modular_flush_lf_grid_group_oob() {
+        use std::panic;
+
+        let data = include_bytes!("../../tests/testdata/modular_flush_lf_grid_group_oob.jxl");
+
+        let result = panic::catch_unwind(|| {
+            let _ = decode(data, usize::MAX, false, false, None);
+        });
+
+        if let Err(e) = result {
+            let panic_msg = e
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| e.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            assert!(
+                !panic_msg.contains("index out of bounds"),
+                "Unexpected out-of-bounds panic: {panic_msg}",
+            );
+        }
+    }
+
     /// `ftyp` minor version 1 with `jxlp` boxes in physical order 0, 2, 1, 3 (streaming OOO).
     #[test]
     fn decode_ooo_jxlp_animated_container() {

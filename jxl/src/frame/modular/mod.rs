@@ -982,14 +982,24 @@ impl FullModularImage {
         if self.buffer_info[buf_idx].info.output_channel_idx != Some(chan) {
             return Ok(());
         }
+        // `group` is an Hf group index. For buffers whose grid is coarser than
+        // the Hf grid (e.g. `ModularGridKind::Lf`), translate it into the
+        // buffer's own grid coordinate system before indexing `buffer_grid`.
         let grid_is_none = self.buffer_info[buf_idx].grid_kind == ModularGridKind::None;
-        let grid_idx = if grid_is_none { 0 } else { group };
+        let output_grid = if grid_is_none {
+            group
+        } else {
+            let gx = group % self.num_groups.0;
+            let gy = group / self.num_groups.0;
+            self.buffer_info[buf_idx].get_grid_idx(ModularGridKind::Hf, (gx, gy))
+        };
+        let grid_idx = if grid_is_none { 0 } else { output_grid };
         if self.buffer_info[buf_idx].buffer_grid[grid_idx].get_status()
             == BUFFER_STATUS_FINAL_RENDER
         {
             return Ok(());
         }
-        self.maybe_output(buf_idx, group, false, &mut |chan, grid, complete, img| {
+        self.maybe_output(buf_idx, output_grid, false, &mut |chan, grid, complete, img| {
             pass_to_pipeline(chan, grid, complete, img.unwrap())
         })
     }
