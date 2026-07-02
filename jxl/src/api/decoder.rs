@@ -329,25 +329,8 @@ pub(crate) mod tests {
     /// The input is malformed; decoding may error, but must not panic.
     #[test]
     fn test_fuzzer_modular_flush_lf_grid_group_oob() {
-        use std::panic;
-
         let data = include_bytes!("../../tests/testdata/modular_flush_lf_grid_group_oob.jxl");
-
-        let result = panic::catch_unwind(|| {
-            let _ = decode(data, usize::MAX, false, false, None);
-        });
-
-        if let Err(e) = result {
-            let panic_msg = e
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| e.downcast_ref::<String>().cloned())
-                .unwrap_or_default();
-            assert!(
-                !panic_msg.contains("index out of bounds"),
-                "Unexpected out-of-bounds panic: {panic_msg}",
-            );
-        }
+        let _ = decode(data, usize::MAX, false, false, None);
     }
 
     /// `ftyp` minor version 1 with `jxlp` boxes in physical order 0, 2, 1, 3 (streaming OOO).
@@ -425,7 +408,7 @@ pub(crate) mod tests {
                     let available_before = chunk_input.len();
                     let process_result = $decoder.process(&mut chunk_input $(, $extra_arg)?);
                     input = &input[(available_before - chunk_input.len())..];
-                    match process_result.unwrap() {
+                    match process_result? {
                         ProcessingResult::Complete { result } => break result,
                         ProcessingResult::NeedsMoreInput { fallback, .. } => {
                             $(
@@ -540,14 +523,14 @@ pub(crate) mod tests {
     }
 
     fn decode_test_file(path: &Path) -> Result<(), Error> {
-        decode(&std::fs::read(path)?, usize::MAX, false, false, None)?;
+        decode(&std::fs::read(path)?, usize::MAX, false, false, None).unwrap();
         Ok(())
     }
 
     for_each_test_file!(decode_test_file);
 
     fn decode_test_file_chunks(path: &Path) -> Result<(), Error> {
-        decode(&std::fs::read(path)?, 1, false, false, None)?;
+        decode(&std::fs::read(path)?, 1, false, false, None).unwrap();
         Ok(())
     }
 
@@ -619,8 +602,8 @@ pub(crate) mod tests {
 
     fn compare_pipelines(path: &Path) -> Result<(), Error> {
         let file = std::fs::read(path)?;
-        let simple_frames = decode(&file, usize::MAX, true, false, None)?.1;
-        let frames = decode(&file, usize::MAX, false, false, None)?.1;
+        let simple_frames = decode(&file, usize::MAX, true, false, None).unwrap().1;
+        let frames = decode(&file, usize::MAX, false, false, None).unwrap().1;
         assert_eq!(frames.len(), simple_frames.len());
         for (fc, (f, sf)) in frames.into_iter().zip(simple_frames).enumerate() {
             compare_frames(path, fc, &f, &sf)?;
@@ -633,9 +616,9 @@ pub(crate) mod tests {
     fn compare_incremental(path: &Path) -> Result<(), Error> {
         let file = std::fs::read(path).unwrap();
         // One-shot decode
-        let (_, one_shot_frames) = decode(&file, usize::MAX, false, false, None)?;
+        let (_, one_shot_frames) = decode(&file, usize::MAX, false, false, None).unwrap();
         // Incremental decode with arbitrary flushes.
-        let (_, frames) = decode(&file, 123, false, true, None)?;
+        let (_, frames) = decode(&file, 123, false, true, None).unwrap();
 
         // Compare one_shot_frames and frames
         assert_eq!(one_shot_frames.len(), frames.len());
@@ -1476,29 +1459,8 @@ pub(crate) mod tests {
     /// Tests that malformed JXL files with overflow-inducing data don't panic
     #[test]
     fn test_fuzzer_smallbuffer_overflow() {
-        use std::panic;
-
         let data = include_bytes!("../../tests/testdata/fuzzer_smallbuffer_overflow.jxl");
-
-        // The test passes if it doesn't panic with "attempt to add with overflow"
-        // It's OK if it returns an error or panics with "Unexpected end of input"
-        let result = panic::catch_unwind(|| {
-            let _ = decode(data, 1024, false, false, None);
-        });
-
-        // If it panicked, make sure it wasn't an overflow panic
-        if let Err(e) = result {
-            let panic_msg = e
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| e.downcast_ref::<String>().cloned())
-                .unwrap_or_default();
-            assert!(
-                !panic_msg.contains("overflow"),
-                "Unexpected overflow panic: {}",
-                panic_msg
-            );
-        }
+        let _ = decode(data, 1024, false, false, None);
     }
 
     fn make_box(ty: &[u8; 4], content: &[u8]) -> Vec<u8> {
