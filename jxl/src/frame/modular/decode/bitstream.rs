@@ -35,6 +35,13 @@ fn can_decode_fast_lossless(tree: &Tree) -> bool {
         return false;
     }
 
+    // is_rle() does not imply that LZ77 is enabled; decode_fast_lossless unwraps
+    // the LZ77 parameters, which are only present when it is.
+    let lz77 = tree.histograms.lz77_params();
+    if !lz77.enabled || lz77.min_symbol.is_none() || lz77.min_length.is_none() {
+        return false;
+    }
+
     matches!(tree.histograms.codes(), Codes::Huffman(_))
 }
 
