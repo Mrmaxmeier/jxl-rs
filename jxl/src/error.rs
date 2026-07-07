@@ -269,8 +269,8 @@ pub enum Error {
     NotGrayscale,
     #[error("Invalid output buffer byte size {0}x{1} for {2}x{3} image with type {4:?} {5:?}")]
     InvalidOutputBufferSize(usize, usize, usize, usize, JxlColorType, JxlDataFormat),
-    #[error("Attempting to save channels with different downsample amounts: {0:?} and {1:?}")]
-    SaveDifferentDownsample((u8, u8), (u8, u8)),
+    #[error("Stage '{0}' uses channels with different downsample amounts: {1:?} and {2:?}")]
+    PipelineDifferentDownsample(String, (u8, u8), (u8, u8)),
     #[error("Image has {0} extra channels, more than the maximum of 256")]
     TooManyExtraChannels(usize),
     #[error("No LF frame for level {0}")]

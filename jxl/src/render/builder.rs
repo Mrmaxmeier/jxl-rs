@@ -237,7 +237,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
             let [current_info, next_info, ..] = &mut channel_info[s..] else {
                 unreachable!()
             };
-            let mut save_downsample = None;
             for chan in 0..num_channels {
                 let cur_chan = &mut current_info[chan];
                 let next_chan = &mut next_info[chan];
@@ -254,15 +253,6 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
                 // Arithmetic overflows here should be very uncommon, so custom error variants
                 // are probably unwarranted.
                 let cur_downsample = &mut cur_downsamples[chan];
-                if matches!(stage, Stage::Save(_))
-                    && save_downsample.is_some_and(|x| x != *cur_downsample)
-                {
-                    save_downsample = Some(*cur_downsample);
-                    return Err(Error::SaveDifferentDownsample(
-                        save_downsample.unwrap(),
-                        *cur_downsample,
-                    ));
-                }
                 let next_downsample = &mut next_chan.downsample;
                 let next_total_downsample = *cur_downsample;
                 cur_downsample.0 = cur_downsample
@@ -279,6 +269,26 @@ impl<Pipeline: RenderPipeline> RenderPipelineBuilder<Pipeline> {
         for (chan, cur_downsample) in cur_downsamples.iter().enumerate() {
             channel_info[0][chan].downsample = *cur_downsample;
         }
+
+        // Stages process all their channels with shared geometry, so channels used by the
+        // same stage must agree on their total downsample amount.
+        for (s, stage) in self.shared.stages.iter().enumerate() {
+            let mut downsamples = channel_info[s]
+                .iter()
+                .enumerate()
+                .filter(|&(c, _)| stage.uses_channel(c))
+                .map(|(_, chinfo)| chinfo.downsample);
+            if let Some(first) = downsamples.next()
+                && let Some(mismatch) = downsamples.find(|&d| d != first)
+            {
+                return Err(Error::PipelineDifferentDownsample(
+                    stage.to_string(),
+                    first,
+                    mismatch,
+                ));
+            }
+        }
+
         #[cfg(feature = "tracing")]
         {
             for (s, (current_info, stage)) in channel_info

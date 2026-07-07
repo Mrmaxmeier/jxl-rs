@@ -181,19 +181,18 @@ impl RenderPipeline for LowMemoryRenderPipeline {
             .iter()
             .zip(shared.channel_info.iter())
             .map(|(s, ci)| {
-                let dowsamplings: Vec<_> = (0..nc)
-                    .filter_map(|c| {
-                        if s.uses_channel(c) {
-                            Some(ci[c].downsample)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                for &d in dowsamplings.iter() {
-                    assert_eq!(d, dowsamplings[0]);
-                }
-                (dowsamplings[0].0 as usize, dowsamplings[0].1 as usize)
+                // The builder rejects pipelines where the channels used by a stage disagree
+                // on their downsample amount (Error::PipelineDifferentDownsample), so the
+                // first used channel is representative.
+                let downsample = (0..nc)
+                    .find(|&c| s.uses_channel(c))
+                    .map_or((0, 0), |c| ci[c].downsample);
+                debug_assert!(
+                    (0..nc)
+                        .filter(|&c| s.uses_channel(c))
+                        .all(|c| ci[c].downsample == downsample)
+                );
+                (downsample.0 as usize, downsample.1 as usize)
             })
             .collect();
 
