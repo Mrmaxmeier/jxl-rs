@@ -242,41 +242,65 @@ impl BoxParser {
                     idx,
                     last,
                 } => {
-                    let num = remaining.min(usize::MAX as u64) as usize;
-                    if !self.box_buffer.is_empty() {
-                        let take = num.min(self.box_buffer.len());
-                        buf.extend_from_slice(&self.box_buffer[..take]);
-                        self.box_buffer.consume(take);
-                        remaining -= take as u64;
-                    } else {
-                        buf.try_reserve(num)?;
-                        let old_len = buf.len();
-                        buf.resize(old_len + num, 0);
-                        let read = input.read(&mut [IoSliceMut::new(&mut buf[old_len..])])?;
-                        self.total_file_consumed += read as u64;
-                        if read == 0 {
-                            return Err(Error::OutOfBounds(num));
+                    // Grow the buffer in bounded chunks rather than reserving the full
+                    // `remaining` up front. A corrupt/malicious box length can claim a
+                    // payload of tens of gigabytes; allocating that eagerly OOMs even
+                    // though the real input is only a few KiB. Chunked reads make the
+                    // buffer grow no faster than actual input arrives, and a short read
+                    // surfaces as `OutOfBounds` below. The chunks are consumed in an
+                    // inner loop so the state (and its payload buffer) is not re-cloned
+                    // per chunk by the `self.state.clone()` at the top of the outer loop.
+                    const OOO_JXLP_READ_CHUNK: u64 = 1 << 16;
+                    while remaining > 0 {
+                        let num =
+                            remaining.min(OOO_JXLP_READ_CHUNK).min(usize::MAX as u64) as usize;
+                        if !self.box_buffer.is_empty() {
+                            let take = num.min(self.box_buffer.len());
+                            buf.extend_from_slice(&self.box_buffer[..take]);
+                            self.box_buffer.consume(take);
+                            remaining -= take as u64;
+                        } else {
+                            buf.try_reserve(num)?;
+                            let old_len = buf.len();
+                            buf.resize(old_len + num, 0);
+                            let read = input.read(&mut [IoSliceMut::new(&mut buf[old_len..])]);
+                            let read = match read {
+                                Ok(read) => read,
+                                Err(e) => {
+                                    // Persist what was accumulated so far so a retrying
+                                    // caller can resume where we left off.
+                                    buf.truncate(old_len);
+                                    self.state = ParseState::BufferingOooJxlp {
+                                        remaining,
+                                        buf,
+                                        idx,
+                                        last,
+                                    };
+                                    return Err(e.into());
+                                }
+                            };
+                            self.total_file_consumed += read as u64;
+                            buf.truncate(old_len + read);
+                            if read == 0 {
+                                self.state = ParseState::BufferingOooJxlp {
+                                    remaining,
+                                    buf,
+                                    idx,
+                                    last,
+                                };
+                                return Err(Error::OutOfBounds(num));
+                            }
+                            remaining -= read as u64;
                         }
-                        buf.truncate(old_len + read);
-                        remaining -= read as u64;
                     }
-                    if remaining == 0 {
-                        self.ooo_jxlp.buffered.insert(
-                            idx,
-                            BufferedOooJxlp {
-                                payload: buf,
-                                is_last: last,
-                            },
-                        );
-                        self.state = ParseState::BoxNeeded;
-                    } else {
-                        self.state = ParseState::BufferingOooJxlp {
-                            remaining,
-                            buf,
-                            idx,
-                            last,
-                        };
-                    }
+                    self.ooo_jxlp.buffered.insert(
+                        idx,
+                        BufferedOooJxlp {
+                            payload: buf,
+                            is_last: last,
+                        },
+                    );
+                    self.state = ParseState::BoxNeeded;
                 }
                 ParseState::BoxNeeded => {
                     let read = self.box_buffer.refill(|b| input.read(b), None)?;
@@ -470,5 +494,29 @@ mod tests {
             }
         }
         panic!("parser stuck at SkippableBox(0)");
+    }
+
+    /// Regression: a `jxlp` box declaring a multi-gigabyte payload (from a corrupt box
+    /// length) in an out-of-order container must not trigger an eager giant allocation.
+    /// The parser buffers in bounded chunks and reports a short read as `OutOfBounds`
+    /// rather than reserving the declared size and OOMing.
+    #[test]
+    fn ooo_jxlp_huge_box_len_does_not_oom() {
+        let data = std::fs::read("tests/testdata/ooo_jxlp_huge_box_len_oom.jxl").unwrap();
+        let mut parser = BoxParser::new();
+        let mut input = data.as_slice();
+        // Should error out (input exhausted well before the claimed payload) without
+        // attempting to allocate the ~37 GB the box header claims.
+        let mut result = Ok(0);
+        for _ in 0..100 {
+            result = parser.get_more_codestream(&mut input);
+            if result.is_err() {
+                break;
+            }
+        }
+        assert!(
+            result.is_err(),
+            "expected an error on the truncated giant jxlp box"
+        );
     }
 }
